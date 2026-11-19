@@ -118,27 +118,83 @@ fn blue_normal_is_the_look_that_shipped() {
     assert_eq!(dark.text_selection, Tokens::dark().text_selection);
 }
 
+/// The pairs of one palette that fall short, with the mode named: the rules of `PAIRS` and, in
+/// high contrast, of `STRONG_PAIRS` (disabled controls are exempt: they stay at 3:1 in both; in
+/// high contrast text and outlines need 7:1, icons stay at 3:1).
+fn wrong_pairs(mode: &str, t: &Tokens, high: bool) -> Vec<String> {
+    let mut wrong = Vec::new();
+    let extra: &[Pair] = if high { STRONG_PAIRS } else { &[] };
+    for (name, fg, bg, min) in PAIRS.iter().chain(extra) {
+        let outline = name.contains("border") || name.contains("edge") || name.starts_with("accent on");
+        let min = if !high || name.contains("disabled") {
+            *min
+        } else if *min == TEXT || (*min == GRAPHIC && outline && !name.starts_with("rule") && !name.contains("faint") && !name.contains("unfocused"))
+        {
+            STRONG
+        } else {
+            *min
+        };
+        let got = ratio(fg(t), bg(t));
+        if got < min {
+            wrong.push(format!("{name} ({mode}) is {got:.2}, needs {min}"));
+        }
+    }
+    wrong
+}
+
 #[test]
 fn token_pairs_meet_their_contrast() {
     let mut wrong = Vec::new();
     for (mode, t, high) in every_theme() {
-        let extra: &[Pair] = if high { STRONG_PAIRS } else { &[] };
-        for (name, fg, bg, min) in PAIRS.iter().chain(extra) {
-            // Disabled controls are exempt: they stay at 3:1 in both. In high contrast text and
-            // outlines need 7:1; icons stay at 3:1.
-            let outline = name.contains("border") || name.contains("edge") || name.starts_with("accent on");
-            let min = if !high || name.contains("disabled") {
-                *min
-            } else if *min == TEXT
-                || (*min == GRAPHIC && outline && !name.starts_with("rule") && !name.contains("faint") && !name.contains("unfocused"))
-            {
-                STRONG
-            } else {
-                *min
-            };
-            let got = ratio(fg(&t), bg(&t));
-            if got < min {
-                wrong.push(format!("{name} ({mode}) is {got:.2}, needs {min}"));
+        wrong.extend(wrong_pairs(&mode, &t, high));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A custom accent: whatever colour the owner picks — the extremes of the cube and a
+/// deterministic sweep of it — is fitted so the same pairs pass as for the presets, in the light
+/// theme and in both greys of the dark one, with high contrast off and on.
+#[test]
+fn custom_accent_colours_meet_their_contrast() {
+    let mut colors = vec![
+        Color32::BLACK,
+        Color32::WHITE,
+        Color32::RED,
+        Color32::GREEN,
+        Color32::BLUE,
+        Color32::from_rgb(0xFF, 0xFF, 0x00),
+        Color32::from_rgb(0x00, 0xFF, 0xFF),
+        Color32::from_rgb(0xFF, 0x00, 0xFF),
+        Color32::from_rgb(0x80, 0x80, 0x80),
+        Color32::from_rgb(0x12, 0x34, 0x56),
+        Color32::from_rgb(0xAB, 0xCD, 0xEF),
+        super::DEFAULT_CUSTOM_COLOR,
+    ];
+    let mut x: u32 = 0x1234_5678;
+    for _ in 0..96 {
+        let mut next = || {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (x >> 24) as u8
+        };
+        colors.push(Color32::from_rgb(next(), next(), next()));
+    }
+    let mut wrong = Vec::new();
+    for c in colors {
+        let hex = super::hex_string(c);
+        for dark in [false, true] {
+            for high in [false, true] {
+                let hc = if high { "high contrast" } else { "normal" };
+                let mut modes = vec![(format!("custom {hex} light {hc}"), Tokens::build_choice(false, Accent::Custom, Some(c), high))];
+                if dark {
+                    modes.push((format!("custom {hex} dark {hc}"), Tokens::build_choice(true, Accent::Custom, Some(c), high)));
+                    modes.push((
+                        format!("custom {hex} blue dark {hc}"),
+                        Tokens::build_dark_choice(super::DarkStyle::Blue, Accent::Custom, Some(c), high),
+                    ));
+                }
+                for (mode, t) in modes {
+                    wrong.extend(wrong_pairs(&mode, &t, high));
+                }
             }
         }
     }
